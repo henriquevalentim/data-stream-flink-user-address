@@ -8,11 +8,16 @@ import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.KeyedCoProcessFunction;
+import org.apache.flink.streaming.api.functions.windowing.AllWindowFunction;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTimeWindows;
+import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 
 import Converter.UserAddressToDocumentConverter;
+import Converter.CountStateByUser;
 import Deserializer.AddressDeserializationSchema;
 import Deserializer.UserDeserializationSchema;
 import Dto.Address;
@@ -21,7 +26,9 @@ import Dto.UserAddress;
 import Sink.MongoSink;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class Main {
 
@@ -31,6 +38,7 @@ public class Main {
     private static final String MONGO_URI = "mongodb://" + MONGO_USERNAME + ":" + MONGO_PASSWORD + "@localhost:27017";
     private static final String MONGO_DATABASE_USERADDRESS = "userAddress";
     private static final String MONGO_COLLECTION_USERADDRESS = "userAddress";
+    private static final String MONGO_COLLECTION_USER_COUNT_BY_STATE = "userCountByState";
 
     public static void main(String[] args) throws Exception {
 
@@ -120,13 +128,33 @@ public class Main {
                             out.collect(new UserAddress(user, addresses));
                         }
                     }
-                });
+                }).name("Aggregate UserAddress");
 
-        // Step 6: Sink the combined stream to MongoDB
-        userAddressStream.addSink(new MongoSink<>(MONGO_URI, MONGO_DATABASE_USERADDRESS, MONGO_COLLECTION_USERADDRESS, new UserAddressToDocumentConverter()))
+        // Step 6: Aggregate user count by state
+        DataStream<Map<String, Integer>> userCountByStateStream = userAddressStream
+                .windowAll(TumblingProcessingTimeWindows.of(Time.minutes(1)))
+                .apply(new AllWindowFunction<UserAddress, Map<String, Integer>, TimeWindow>() {
+                    @Override
+                    public void apply(TimeWindow window, Iterable<UserAddress> values, Collector<Map<String, Integer>> out) throws Exception {
+                        Map<String, Integer> stateCountMap = new HashMap<>();
+                        for (UserAddress userAddress : values) {
+                            for (Address address : userAddress.getAddresses()) {
+                                stateCountMap.put(address.getState(), stateCountMap.getOrDefault(address.getState(), 0) + 1);
+                            }
+                        }
+                        out.collect(stateCountMap);
+                    }
+                }).name("Count state user");
+
+        // Step 7: Sink the user count by state to MongoDB
+        userCountByStateStream.addSink(new MongoSink<>(MONGO_URI, MONGO_DATABASE_USERADDRESS, MONGO_COLLECTION_USER_COUNT_BY_STATE, null, new CountStateByUser()))
+                .name("MongoDB Sink for User Count by State");
+
+        // Step 8: Sink the combined stream to MongoDB
+        userAddressStream.addSink(new MongoSink<>(MONGO_URI, MONGO_DATABASE_USERADDRESS, MONGO_COLLECTION_USERADDRESS, new UserAddressToDocumentConverter(), null))
                 .name("MongoDB Sink for UserAddress");
 
-        // Step 7: Execute the Flink job
+        // Step 9: Execute the Flink job
         env.execute("Kafka-flink-stream-mongo");
     }
 }

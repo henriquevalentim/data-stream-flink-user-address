@@ -1,150 +1,84 @@
-import org.apache.flink.api.common.eventtime.WatermarkStrategy;
-import org.apache.flink.api.common.state.MapState;
-import org.apache.flink.api.common.state.MapStateDescriptor;
-import org.apache.flink.api.java.functions.KeySelector;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.datastream.DataStreamSource;
-import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.co.KeyedCoProcessFunction;
-import org.apache.flink.util.Collector;
-import org.apache.flink.connector.kafka.source.KafkaSource;
-import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import json
+import random
+import time
 
-import Converter.UserAddressToDocumentConverter;
-import Deserializer.AddressDeserializationSchema;
-import Deserializer.UserDeserializationSchema;
-import Dto.Address;
-import Dto.User;
-import Dto.UserAddress;
-import Sink.MongoSink;
+from faker import Faker
+from confluent_kafka import SerializingProducer
+from datetime import datetime, timezone
 
-import java.util.ArrayList;
-import java.util.List;
+fake = Faker()
 
-public class Main {
+def generate_user():
+    user = fake.simple_profile()
+    genre = random.choice(['M', 'F', 'O'])
+    first_name = fake.first_name_male() if genre == "M" else fake.first_name_female()
+    last_name = fake.last_name()
 
-    private static final String BROKERS = "localhost:9092";
-    private static final String MONGO_USERNAME = "root";
-    private static final String MONGO_PASSWORD = "123456";
-    private static final String MONGO_URI = "mongodb://" + MONGO_USERNAME + ":" + MONGO_PASSWORD + "@localhost:27017";
-    private static final String MONGO_DATABASE_USERADDRESS = "userAddress";
-    private static final String MONGO_COLLECTION_USERADDRESS = "userAddress";
-
-    public static void main(String[] args) throws Exception {
-
-        // Step 1: Create the StreamExecutionEnvironment
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-
-        // Step 2: Define Kafka source
-        KafkaSource<User> sourceUser = KafkaSource.<User>builder()
-                .setBootstrapServers(BROKERS)
-                .setProperty("partition.discovery.interval.ms", "1000")
-                .setTopics("user")
-                .setGroupId("groupId-919292")
-                .setStartingOffsets(OffsetsInitializer.earliest())
-                .setValueOnlyDeserializer(new UserDeserializationSchema())
-                .build();
-
-        KafkaSource<Address> sourceAddress = KafkaSource.<Address>builder()
-                .setBootstrapServers(BROKERS)
-                .setProperty("partition.discovery.interval.ms", "1000")
-                .setTopics("address")
-                .setGroupId("groupId-919293")
-                .setStartingOffsets(OffsetsInitializer.earliest())
-                .setValueOnlyDeserializer(new AddressDeserializationSchema())
-                .build();
-
-        // Step 3: Create a DataStreamSource from Kafka
-        DataStreamSource<User> usersStream = env.fromSource(sourceUser, WatermarkStrategy.noWatermarks(), "Kafka Source user");
-        DataStreamSource<Address> addressStream = env.fromSource(sourceAddress, WatermarkStrategy.noWatermarks(), "Kafka Source address");
-
-        // Step 4: Key streams by userId
-        DataStream<User> keyedUserStream = usersStream.keyBy((KeySelector<User, String>) User::getId);
-        DataStream<Address> keyedAddressStream = addressStream.keyBy((KeySelector<Address, String>) Address::getUserId);
-
-        // Step 5: Combine the streams using KeyedCoProcessFunction
-        SingleOutputStreamOperator<UserAddress> userAddressStream = keyedUserStream
-                .connect(keyedAddressStream)
-                .keyBy(User::getId, Address::getUserId)
-                .process(new KeyedCoProcessFunction<String, User, Address, UserAddress>() {
-                    // State to store User and Addresses
-                    private transient MapState<String, User> userState;
-                    private transient MapState<String, List<Address>> addressState;
-                    private transient MapState<String, Boolean> emittedState;
-
-                    @Override
-                    public void open(Configuration parameters) throws Exception {
-                        MapStateDescriptor<String, User> userStateDescriptor = new MapStateDescriptor<>(
-                                "userState",
-                                String.class,
-                                User.class
-                        );
-                        userState = getRuntimeContext().getMapState(userStateDescriptor);
-
-                        MapStateDescriptor<String, List<Address>> addressStateDescriptor = new MapStateDescriptor<>(
-                                "addressState",
-                                String.class,
-                                (Class<List<Address>>)(Class<?>)List.class
-                        );
-                        addressState = getRuntimeContext().getMapState(addressStateDescriptor);
-
-                        MapStateDescriptor<String, Boolean> emittedStateDescriptor = new MapStateDescriptor<>(
-                                "emittedState",
-                                String.class,
-                                Boolean.class
-                        );
-                        emittedState = getRuntimeContext().getMapState(emittedStateDescriptor);
-                    }
-
-                    @Override
-                    public void processElement1(User user, Context ctx, Collector<UserAddress> out) throws Exception {
-                        // Update user state
-                        userState.put(user.getId(), user);
-
-                        // Check if we've already emitted this user
-                        if (Boolean.TRUE.equals(emittedState.get(user.getId()))) {
-                            return;
-                        }
-
-                        // Emit combined user and addresses if addresses are available
-                        List<Address> addresses = addressState.get(user.getId());
-                        if (addresses != null) {
-                            out.collect(new UserAddress(user, addresses));
-                            emittedState.put(user.getId(), true);
-                        }
-                    }
-
-                    @Override
-                    public void processElement2(Address address, Context ctx, Collector<UserAddress> out) throws Exception {
-                        // Update address state
-                        List<Address> addresses = addressState.get(address.getUserId());
-                        if (addresses == null) {
-                            addresses = new ArrayList<>();
-                        }
-                        addresses.add(address);
-                        addressState.put(address.getUserId(), addresses);
-
-                        // Check if we've already emitted this user
-                        if (Boolean.TRUE.equals(emittedState.get(address.getUserId()))) {
-                            return;
-                        }
-
-                        // Emit combined user and addresses if user is available
-                        User user = userState.get(address.getUserId());
-                        if (user != null) {
-                            out.collect(new UserAddress(user, addresses));
-                            emittedState.put(address.getUserId(), true);
-                        }
-                    }
-                });
-
-        // Step 6: Sink the combined stream to MongoDB
-        userAddressStream.addSink(new MongoSink<>(MONGO_URI, MONGO_DATABASE_USERADDRESS, MONGO_COLLECTION_USERADDRESS, new UserAddressToDocumentConverter()))
-                .name("MongoDB Sink for UserAddress");
-
-        // Step 7: Execute the Flink job
-        env.execute("Kafka-flink-stream-mongo");
+    return {
+        "id": fake.uuid4(),
+        "name": f"{first_name} {last_name}",
+        "email": f"{first_name.lower()}.{last_name.lower()}@{fake.domain_name()}",
+        "genre": genre,
+        'registerDate': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f%z')
     }
-}
+
+def generate_addresses(userId):
+    addresses = []
+    for _ in range(random.randint(1, 3)):
+        address = {
+            "userId": userId,
+            "address": fake.address(),
+            "city": fake.city(),
+            "state": fake.state(),
+            "zipCode": fake.zipcode(),
+            "country": fake.country()
+        }
+        addresses.append(address)
+    return addresses
+
+def delivery_report(err, msg):
+    if err is not None:
+        print(f'Message delivery failed: {err}')
+    else:
+        print(f"Message delivered to {msg.topic()} [{msg.partition()}]")
+
+def main():
+    user_topic = 'user'
+    address_topic = 'address'
+    producer = SerializingProducer({
+        'bootstrap.servers': 'localhost:9092'
+    })
+
+    for _ in range(5000):
+        try:
+            user = generate_user()
+            addresses = generate_addresses(user['id'])
+
+            # Produce user message
+            producer.produce(user_topic,
+                             key=user['id'],
+                             value=json.dumps(user),
+                             on_delivery=delivery_report)
+            producer.poll(0)
+
+            # Produce address messages
+            for address in addresses:
+                print(address)
+                producer.produce(address_topic,
+                                 key=address['userId'],
+                                 value=json.dumps(address),
+                                 on_delivery=delivery_report)
+                producer.poll(0)
+            
+            # Sleep to simulate time taken to generate next user and addresses
+            # time.sleep(2)
+        except BufferError:
+            print("Buffer full! Waiting...")
+            time.sleep(1)
+        except Exception as e:
+            print(e)
+
+    producer.flush()
+
+if __name__ == "__main__":
+    main()

@@ -4,28 +4,31 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.UpdateOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.bson.Document;
-import com.mongodb.client.model.UpdateOptions;
-import com.mongodb.client.model.Filters;
 
+import java.io.Serializable;
+import java.util.List;
 import java.util.function.Function;
 
-public class MongoSink<T> extends RichSinkFunction<T> {
+public class MongoSink<T> extends RichSinkFunction<T> implements Serializable {
     private final String uri;
     private final String database;
     private final String collection;
-    private final Function<T, Document> converter;
+    private final Function<T, List<Document>> listConverter;
+    private final Function<T, Document> singleConverter;
 
     private transient MongoClient mongoClient;
     private transient MongoCollection<Document> col;
 
-    public MongoSink(String uri, String database, String collection, Function<T, Document> converter) {
+    public MongoSink(String uri, String database, String collection, Function<T, Document> singleConverter, Function<T, List<Document>> listConverter) {
         this.uri = uri;
         this.database = database;
         this.collection = collection;
-        this.converter = converter;
+        this.singleConverter = singleConverter;
+        this.listConverter = listConverter;
     }
 
     @Override
@@ -38,13 +41,23 @@ public class MongoSink<T> extends RichSinkFunction<T> {
 
     @Override
     public void invoke(T value, Context context) {
-        Document document = converter.apply(value);
-        String userId = document.getString("userId");
-        col.updateOne(
-            Filters.eq("userId", userId),
-            new Document("$set", document),
-            new UpdateOptions().upsert(true)
-        );
+        if (singleConverter != null) {
+            Document document = singleConverter.apply(value);
+            col.updateOne(
+                new Document("userId", document.getString("userId")),
+                new Document("$set", document),
+                new UpdateOptions().upsert(true)
+            );
+        } else if (listConverter != null) {
+            List<Document> documents = listConverter.apply(value);
+            for (Document document : documents) {
+                col.updateOne(
+                    new Document("state", document.getString("state")),
+                    new Document("$set", document),
+                    new UpdateOptions().upsert(true)
+                );
+            }
+        }
     }
 
     @Override
