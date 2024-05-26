@@ -1,0 +1,36 @@
+Criar docker-compose com Kafka,zookeper, postgres, mongodb
+
+Criar tabela user
+CREATE TABLE IF NOT EXISTS "users" (
+    id VARCHAR(255) PRIMARY KEY,
+    name VARCHAR(255)  NOT NULL,
+    email VARCHAR(255)  NOT NULL,
+    genre VARCHAR(255)  NOT NULL,
+    register_date TIMESTAMP
+);
+
+Criar algoritmo python para enviar usuario para um topico(user) Kafka
+Usuario
+    id
+    name
+    email
+    birthdate
+    status
+    genre
+
+Criar algoritmo java para ler as mensagens do kafka e enviar para o postgres e mongodb
+
+
+Executar o flink
+./bin/flink run -c Main ../../estudos/data-stream-flink-user-address/target/flink-kafka2postgres-1.0-SNAPSHOT.jar
+
+
+Contar mensagens em um topico especifico KAFKA
+kafka-run-class kafka.tools.GetOffsetShell --broker-list localhost:9092 --topic user --time -1
+
+
+ALTERAR O ALGORITMO PYTHON PARA SALVAR NO MONGO E MANDAR PARA FILA KAFKA COM O _ID DO MONGO
+ESSE _ID VAI SER IMPORTANTE PARA ENCONTRAR ESSE REGISTRO POSTERIORMENTE E ATUALIZALO CASO NECESSARIO
+
+FAZER UM TESTE TBM DO ALGORITIMO COM APENAS 1 PARALELISMO PARA VER SE NAO PODE SER
+ISSO QUE ESTA BUGANDO OS USUARIOS E ENDERECOS
