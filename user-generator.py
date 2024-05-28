@@ -24,7 +24,7 @@ def generate_user():
 
 def generate_addresses(userId):
     addresses = []
-    for _ in range(random.randint(1, 3)):
+    for _ in range(random.randint(3, 3)):
         address = {
             "userId": userId,
             "address": fake.address(),
@@ -49,7 +49,7 @@ def main():
         'bootstrap.servers': 'localhost:9092'
     })
 
-    for _ in range(5000):
+    for _ in range(10):
         try:
             user = generate_user()
             addresses = generate_addresses(user['id'])

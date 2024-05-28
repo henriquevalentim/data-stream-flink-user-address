@@ -18,6 +18,7 @@ import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsIni
 
 import Converter.UserAddressToDocumentConverter;
 import Converter.CountStateByUser;
+import Converter.CountCountryByUser;
 import Deserializer.AddressDeserializationSchema;
 import Deserializer.UserDeserializationSchema;
 import Dto.Address;
@@ -39,6 +40,7 @@ public class Main {
     private static final String MONGO_DATABASE_USERADDRESS = "userAddress";
     private static final String MONGO_COLLECTION_USERADDRESS = "userAddress";
     private static final String MONGO_COLLECTION_USER_COUNT_BY_STATE = "userCountByState";
+    private static final String MONGO_COLLECTION_USER_COUNT_BY_COUNTRY = "userCountByCountry";
 
     public static void main(String[] args) throws Exception {
 
@@ -142,19 +144,41 @@ public class Main {
                                 stateCountMap.put(address.getState(), stateCountMap.getOrDefault(address.getState(), 0) + 1);
                             }
                         }
+                        System.out.println("State Count: " + stateCountMap);
                         out.collect(stateCountMap);
                     }
                 }).name("Count state user");
 
-        // Step 7: Sink the user count by state to MongoDB
-        userCountByStateStream.addSink(new MongoSink<>(MONGO_URI, MONGO_DATABASE_USERADDRESS, MONGO_COLLECTION_USER_COUNT_BY_STATE, null, new CountStateByUser()))
+        // Step 7: Aggregate user count by country
+        DataStream<Map<String, Integer>> userCountByCountryStream = userAddressStream
+                .windowAll(TumblingProcessingTimeWindows.of(Time.minutes(1)))
+                .apply(new AllWindowFunction<UserAddress, Map<String, Integer>, TimeWindow>() {
+                    @Override
+                    public void apply(TimeWindow window, Iterable<UserAddress> values, Collector<Map<String, Integer>> out) throws Exception {
+                        Map<String, Integer> countryCountMap = new HashMap<>();
+                        for (UserAddress userAddress : values) {
+                            for (Address address : userAddress.getAddresses()) {
+                                countryCountMap.put(address.getCountry(), countryCountMap.getOrDefault(address.getCountry(), 0) + 1);
+                            }
+                        }
+                        System.out.println("Country Count: " + countryCountMap);
+                        out.collect(countryCountMap);
+                    }
+                }).name("Count country user");
+
+        // Step 8: Sink the user count by state to MongoDB
+        userCountByStateStream.addSink(new MongoSink<>(MONGO_URI, MONGO_DATABASE_USERADDRESS, MONGO_COLLECTION_USER_COUNT_BY_STATE, null, new CountStateByUser(), "state"))
                 .name("MongoDB Sink for User Count by State");
 
-        // Step 8: Sink the combined stream to MongoDB
-        userAddressStream.addSink(new MongoSink<>(MONGO_URI, MONGO_DATABASE_USERADDRESS, MONGO_COLLECTION_USERADDRESS, new UserAddressToDocumentConverter(), null))
+        // Step 9: Sink the user count by country to MongoDB
+        userCountByCountryStream.addSink(new MongoSink<>(MONGO_URI, MONGO_DATABASE_USERADDRESS, MONGO_COLLECTION_USER_COUNT_BY_COUNTRY, null, new CountCountryByUser(), "country"))
+                .name("MongoDB Sink for User Count by Country");
+
+        // Step 10: Sink the combined stream to MongoDB
+        userAddressStream.addSink(new MongoSink<>(MONGO_URI, MONGO_DATABASE_USERADDRESS, MONGO_COLLECTION_USERADDRESS, new UserAddressToDocumentConverter(), null, "userId"))
                 .name("MongoDB Sink for UserAddress");
 
-        // Step 9: Execute the Flink job
+        // Step 11: Execute the Flink job
         env.execute("Kafka-flink-stream-mongo");
     }
 }

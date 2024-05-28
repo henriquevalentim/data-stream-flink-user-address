@@ -19,16 +19,18 @@ public class MongoSink<T> extends RichSinkFunction<T> implements Serializable {
     private final String collection;
     private final Function<T, List<Document>> listConverter;
     private final Function<T, Document> singleConverter;
+    private final String keyField;
 
     private transient MongoClient mongoClient;
     private transient MongoCollection<Document> col;
 
-    public MongoSink(String uri, String database, String collection, Function<T, Document> singleConverter, Function<T, List<Document>> listConverter) {
+    public MongoSink(String uri, String database, String collection, Function<T, Document> singleConverter, Function<T, List<Document>> listConverter, String keyField) {
         this.uri = uri;
         this.database = database;
         this.collection = collection;
         this.singleConverter = singleConverter;
         this.listConverter = listConverter;
+        this.keyField = keyField;
     }
 
     @Override
@@ -44,7 +46,7 @@ public class MongoSink<T> extends RichSinkFunction<T> implements Serializable {
         if (singleConverter != null) {
             Document document = singleConverter.apply(value);
             col.updateOne(
-                new Document("userId", document.getString("userId")),
+                new Document(keyField, document.getString(keyField)),
                 new Document("$set", document),
                 new UpdateOptions().upsert(true)
             );
@@ -52,7 +54,7 @@ public class MongoSink<T> extends RichSinkFunction<T> implements Serializable {
             List<Document> documents = listConverter.apply(value);
             for (Document document : documents) {
                 col.updateOne(
-                    new Document("state", document.getString("state")),
+                    new Document(keyField, document.getString(keyField)),
                     new Document("$set", document),
                     new UpdateOptions().upsert(true)
                 );
